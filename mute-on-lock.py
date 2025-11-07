@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
 Mute audio on screen lock and unmute on unlock.
-Monitors systemd-logind for lock/unlock signals.
+Monitors systemd-logind and GNOME ScreenSaver for lock/unlock signals.
 """
 
 import subprocess
 import sys
 import logging
 from gi.repository import GLib
-from pydbus import SystemBus
+from pydbus import SystemBus, SessionBus
 
 # Configure logging
 logging.basicConfig(
@@ -22,7 +22,8 @@ class AudioMuteManager:
     """Manages audio muting based on screen lock state."""
 
     def __init__(self):
-        self.bus = SystemBus()
+        self.system_bus = SystemBus()
+        self.session_bus = SessionBus()
         self.was_muted = False
 
     def mute_audio(self):
@@ -73,22 +74,70 @@ class AudioMuteManager:
             logger.info("System resuming")
             self.unmute_audio()
 
+    def on_screensaver_active_changed(self, active):
+        """Handle GNOME ScreenSaver ActiveChanged signal."""
+        if active:
+            logger.info("Screen locked (GNOME ScreenSaver)")
+            self.mute_audio()
+        else:
+            logger.info("Screen unlocked (GNOME ScreenSaver)")
+            self.unmute_audio()
+
+    def find_user_session(self, login1):
+        """Find the active graphical session for the current user."""
+        import os
+        uid = os.getuid()
+
+        # List all sessions
+        sessions = login1.ListSessions()
+
+        # Find a graphical session for our user
+        for session_id, user_id, username, seat, session_path in sessions:
+            if user_id == uid:
+                session = self.system_bus.get('org.freedesktop.login1', session_path)
+                # Check if it's a graphical session
+                if hasattr(session, 'Type') and session.Type in ['x11', 'wayland']:
+                    logger.info("Found session: %s (type: %s)", session_id, session.Type)
+                    return session
+                # If no Type property, assume it's the right one if it has a seat
+                if seat:
+                    logger.info("Found session: %s", session_id)
+                    return session
+
+        # If no graphical session found, try the first session for this user
+        for session_id, user_id, username, seat, session_path in sessions:
+            if user_id == uid:
+                logger.info("Using session: %s", session_id)
+                return self.system_bus.get('org.freedesktop.login1', session_path)
+
+        raise Exception(f"No session found for UID {uid}")
+
     def run(self):
         """Start monitoring for lock/unlock events."""
         try:
             # Get the login1 manager
-            login1 = self.bus.get('org.freedesktop.login1', '/org/freedesktop/login1')
+            login1 = self.system_bus.get('org.freedesktop.login1', '/org/freedesktop/login1')
 
-            # Get current session
-            session_path = login1.GetSessionByPID(0)
-            session = self.bus.get('org.freedesktop.login1', session_path)
+            # Find the user's session
+            session = self.find_user_session(login1)
 
-            # Subscribe to Lock/Unlock signals
+            # Subscribe to Lock/Unlock signals from systemd-logind
             session.onLock = lambda: self.on_lock(True)
             session.onUnlock = lambda: self.on_lock(False)
 
             # Subscribe to PrepareForSleep signal (suspend/resume)
             login1.onPrepareForSleep = self.on_prepare_for_sleep
+
+            # Try to connect to GNOME ScreenSaver (if available)
+            try:
+                screensaver = self.session_bus.get(
+                    'org.gnome.ScreenSaver',
+                    '/org/gnome/ScreenSaver'
+                )
+                screensaver.onActiveChanged = self.on_screensaver_active_changed
+                logger.info("Connected to GNOME ScreenSaver")
+            except Exception as e:
+                logger.info("GNOME ScreenSaver not available (this is OK on non-GNOME desktops): %s", e)
 
             logger.info("Monitoring started. Press Ctrl+C to stop.")
 
