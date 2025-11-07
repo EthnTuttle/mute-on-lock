@@ -1,0 +1,22 @@
+[Unit]
+Description=Mute audio on screen lock
+Documentation=https://github.com/ethan/mute-on-lock
+After=sound.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/code/mute-on-lock/mute-on-lock.py
+Restart=on-failure
+RestartSec=5
+
+# Environment
+Environment="PYTHONUNBUFFERED=1"
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mute-on-lock
+
+[Install]
+WantedBy=default.target
