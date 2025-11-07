@@ -9,7 +9,8 @@ A systemd service that automatically mutes audio when you lock your screen and u
 - Respects previous mute state (won't unmute if already muted)
 - Also handles suspend/resume events
 - Runs as a systemd user service
-- Lightweight and uses native systemd signals
+- Lightweight and uses native D-Bus signals
+- Works with GNOME, KDE, and other desktop environments
 
 ## Requirements
 
@@ -20,6 +21,8 @@ A systemd service that automatically mutes audio when you lock your screen and u
 
 ## Installation
 
+### Quick Install (Recommended)
+
 1. Install Python dependencies:
    ```bash
    sudo apt install python3-pydbus python3-gi  # Ubuntu/Debian
@@ -29,13 +32,36 @@ A systemd service that automatically mutes audio when you lock your screen and u
    sudo pacman -S python-pydbus python-gobject  # Arch
    ```
 
+2. Run the install script:
+   ```bash
+   chmod +x install.sh
+   ./install.sh
+   ```
+
+The script will automatically:
+- Check for required dependencies
+- Copy files to the correct locations
+- Enable and start the systemd service
+- Verify the installation
+
+### Manual Installation
+
+If you prefer to install manually:
+
+1. Install Python dependencies (see above)
+
 2. Copy the service file to systemd user directory:
    ```bash
    mkdir -p ~/.config/systemd/user
    cp mute-on-lock.service ~/.config/systemd/user/
    ```
 
-3. Enable and start the service:
+3. Make the script executable:
+   ```bash
+   chmod +x mute-on-lock.py
+   ```
+
+4. Enable and start the service:
    ```bash
    systemctl --user daemon-reload
    systemctl --user enable mute-on-lock.service
@@ -84,6 +110,15 @@ pactl set-sink-mute @DEFAULT_SINK@ 0  # unmute
 
 ## Uninstallation
 
+### Quick Uninstall
+
+```bash
+chmod +x uninstall.sh
+./uninstall.sh
+```
+
+### Manual Uninstall
+
 ```bash
 systemctl --user stop mute-on-lock.service
 systemctl --user disable mute-on-lock.service
@@ -93,9 +128,11 @@ systemctl --user daemon-reload
 
 ## How It Works
 
-The service uses the systemd-logind D-Bus API to monitor for:
-- `Lock`/`Unlock` signals from your session
-- `PrepareForSleep` signals for suspend/resume
+The service monitors multiple D-Bus interfaces to catch lock/unlock events:
+
+1. **systemd-logind** - Monitors `Lock`/`Unlock` signals from your session and `PrepareForSleep` signals for suspend/resume
+2. **GNOME ScreenSaver** - For GNOME desktop environments, monitors the `ActiveChanged` signal
+3. **Other desktop environments** - Falls back to systemd-logind signals for KDE, XFCE, etc.
 
 When a lock or suspend event is detected, it uses `pactl` to mute the default audio sink. When unlocking or resuming, it unmutes only if the audio wasn't already muted before locking.
 
